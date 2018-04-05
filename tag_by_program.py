@@ -8,6 +8,10 @@ import numpy as np
 import pylab as plt
 import matplotlib.image as mplimg
 
+###########
+# this part is for lane line extraction
+# assume that road is parallel to direction
+###########
 
 IMG_SZ=384  #image size n*n
 blur_ksize = 5  # Gaussian blur kernel size
@@ -95,11 +99,11 @@ def draw_lines(img, lines, color=[255, 0, 0], thickness=2):
         cv2.line(img, (x1, y1), (x2, y2), color, thickness)
 
 def draw_lanes2(img, points, color=[255, 0, 0], thickness=2):
-    print(points)
     if(len(points) < 2):
         return
     vtx = calc_lane_vertices(points, up_roi_hight, img.shape[0])
     cv2.line(img, vtx[0], vtx[1], color, thickness)
+    return vtx
 
 
 def hough_lines(img, rho, theta, threshold, min_line_len, max_line_gap):
@@ -203,6 +207,7 @@ def find_lane_by_convexhull(inputfilename):
             maxarea = tmparea
             maxarea_id = i
 
+    return_lines = []
     if(maxarea_id >= 0):
         cnt = contours[maxarea_id]
         #approx = cv2.approxPolyDP(cnt, 20, True)
@@ -231,8 +236,8 @@ def find_lane_by_convexhull(inputfilename):
         #print(right_points)
         res_img = np.zeros(img.shape, np.uint8)
         res_img = img.copy()
-        draw_lanes2(res_img, left_points)
-        draw_lanes2(res_img, right_points)
+        return_lines.append(draw_lanes2(res_img, left_points))
+        return_lines.append(draw_lanes2(res_img, right_points))
         #print(right_points)
         #print(approx[1,0])
         #print(approx[0,0,0])
@@ -240,6 +245,7 @@ def find_lane_by_convexhull(inputfilename):
 
     up_roi_hight = IMG_SZ
     up_roi_x = IMG_SZ
+    print(return_lines)
 
     plt.clf()
     plt.subplot(1,4,1)
@@ -253,12 +259,92 @@ def find_lane_by_convexhull(inputfilename):
     #plt.pause(0.5)
     plt.show()
 
+    return return_lines, res_img, type_id
+
+###########
+# this part is for area segment
+# assume that road is parallel to direction
+###########
+
+#input four points, for parallel road
+def find_all_interested_point_parallel(lines):
+    xl0 = lines[0][0][0]
+    yl0 = lines[0][0][1]
+    xl1 = lines[0][1][0]
+    yl1 = lines[0][1][1]
+    xr0 = lines[1][0][0]
+    yr0 = lines[1][0][1]
+    xr1 = lines[1][1][0]
+    yr1 = lines[1][1][1]
+    #x-x0 = k(y-y0)--> x=k*y + b
+    #k=(x0-x1)/(y0-y1), because parallel road will has no y0==y1
+    #b=(x0-k*y0)
+    if(yl0 != yl1):
+        kl01 = float(xl0-xl1) / (yl0-yl1)
+        kr01 = float(xr0-xr1) / (yr0-yr1)
+        bl01 = xl0 - kl01*yl0
+        br01 = xr0 - kr01*yr0
+        if(kl01 == kr01):
+            print('[find intersect point]wrong input lines, paralell lines')
+        else:
+            yvan = int((br01 - bl01) / (kl01 - kr01))
+            xvan = int(kl01*(yvan - yl0) + xl0)
+
+            y_nearmid = int((IMG_SZ + yvan) / 2)
+            y_midfar = int((y_nearmid + yvan) / 2)
+
+            x_nearmid_l01 = int(kl01*(y_nearmid - yl0) + xl0)
+            x_nearmid_r01 = int(kr01*(y_nearmid - yr0) + xr0)
+
+            x_nearmid_l12 = int(x_nearmid_l01 - 3 / 7.5 * (x_nearmid_r01 - x_nearmid_l01))
+            x_nearmid_r12 = int(x_nearmid_r01 + 3 / 7.5 * (x_nearmid_r01 - x_nearmid_l01))
+
+            kl12 = float(xvan - x_nearmid_l12) / (yvan - y_nearmid)
+            bl12 = xvan - kl12*yvan
+
+            kr12 = float(xvan - x_nearmid_r12) / (yvan - y_nearmid)
+            br12 = xvan - kr12*yvan
+
+            xm00 = (x_nearmid_l01 + x_nearmid_r01) / 2
+            km00 = float(xvan - xm00) / (yvan - y_nearmid)
+            bm00 = xvan - km00*yvan
+
+    print((xvan, yvan), xm00, x_nearmid_l12, x_nearmid_r12, x_nearmid_l01, x_nearmid_r01)
+
+    return (xvan, yvan), (km00, bm00), (kl12, bl12), (kr12, br12), y_nearmid, y_midfar
+
+##################
+#________________#
+#________/\______#
+#_______/  \_____#
+#      /    \    #
+#     /      \   #
+##################
+
+def devide_region_parallel(lanelines, res_img):
+    #find vanishing point
+    point_vanish, kbmid, kbl12, kbr12, y_nearmid, y_midfar = find_all_interested_point_parallel(lanelines)
+    #print(point_vanish)
+
+
+
+###########
 #start here
 #flist=gen_fname_list(IMG_FILE_PATH)
 f = open('fnames.txt', 'r')
 flist = f.readlines()
+#read dictionary
+fin = open('type.txt','r')
+fdlist = fin.readlines()
+dictionary = {}
+for ln in fdlist:
+    k, v = ln.split('.')
+    dictionary[k] = v.strip('\n')
+#print(dictionary['7'])
 
 for filename in flist:
     plt.figure(figsize=(15,6))
     #find_lane_by_hough(filename)
-    find_lane_by_convexhull(filename)
+    lanelines, res_img, type_id_csv = find_lane_by_convexhull(filename)
+
+    devide_region_parallel(lanelines, res_img)
